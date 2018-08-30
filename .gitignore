@@ -2,3 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
+
+# ignore r project
+*.Rproj
+# ignore csv
+*.csv
+# ignore pdf documents
+*.pdf
