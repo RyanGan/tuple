@@ -1,0 +1,143 @@
+---
+title: "Tuple Health Skills Evaluation"
+author: "Ryan Gan"
+date: "8/30/2018"
+output: html_document
+---
+
+
+```{r setup, include = F}
+# set up for document; no messages to make it easier to read
+knitr::opts_chunk$set(message=F)
+```
+
+## Introduction
+
+This is a markdown file that contains my R code and analyses for the Tuple Health skills evaluation. Descriptions of each code chunk may be brief as I am working on a 2-hour timeline. 
+
+Loading libraries require to complete assignment. I should be able to complete this entire task using the 'tidyverse' library. I am using R version 3.5.0.
+
+```{r library}
+library(tidyverse)
+```
+
+Reading in simulated claims data and cancer codes. Simulated claims data represents 6-month episode of care. I'm reading in the cancer codes first and joining to claims records by DGNS_CD
+
+```{r read_data}
+# reading cancer codes
+c_codes <- read_csv('cancer_codes.csv')
+
+# reading claims data
+claims <- read_csv('FAKED_phyline.csv') %>% 
+  # join in cancer type and recon_elig by cancer code
+  left_join(c_codes, by = 'DGNS_CD')
+```
+
+Viewing first couple records of the claims data. Description of each variable is provided in the evaluation instructions.
+
+```{r claims_view}
+head(claims)
+```
+
+
+## Question 1: Determining a patient's cancer type
+
+I need to provide a .csv file that contains the cancer type (CANCER_TYPE) for for each patient (BENE_ID). The process for this is outlined in the OCM-PBP-CancerAssignment document provided.
+
+First thing I want to do is find how many unique patient/beneficiaries there are in the data frame (n observations = 2251).
+
+```{r unique_patients}
+# find vector of unique bene ids and count length
+n_patients <- length(unique(claims$BENE_ID))
+# print n_patients
+print(n_patients)
+```
+
+There are 106 unique patients in this data frame. 
+
+### Unique visits
+
+Now moving on to step 2, I need to identify unique visits and count the number of visits associated with each cancer type. A visit is defined by unique combination of BENE_ID, TIN, and LINE_1ST_EXPNS_DT. I then want to count the number of visits associated with each cancer type.
+
+```{r unique_visits}
+# identify unique visits
+unique_visit <- claims %>% 
+  # group by variables outlined in document; including recon_elig just in case 
+  # I need it for rules below
+  group_by(BENE_ID, TIN, LINE_1ST_EXPNS_DT, CANCER_TYPE, RECON_ELIG) %>% 
+  # count up number of observations per visit
+  summarize(n_obs = n()) #%>% 
+```
+
+There are 2,241 unique visits identified through this process (10 records that are not unique). There are 10 duplicate visits that either have to do with a different charge amount and multiple cancer diagnosis codes for the same cancer type on the same visit. 
+
+Now that I have a data frame that contains unique visit, I am going to count up the number of cancer types for each subject and join counts with the unique claims. 
+
+```{r cancer_count}
+# count up the number of different cancer types for each person
+cancer_count <- unique_visit %>% 
+  group_by(BENE_ID, CANCER_TYPE) %>% 
+  summarise(n_cancer = n()) 
+```
+
+I have a data frame of unique visits and a data frame that has the number of cancer types treated each patient.I should be able to assign the cancer type to each patient now.
+
+### Assign the episode the cancer type that has the most visits
+
+For each patient, cancer type is assigned by the type with the most treatment visits. In the event of a tie, the following rules apply:
+1. Most recent visit in the episode, second most recent visit, third most, etc.
+2. Cancer type that is reconciliation-eligible
+3. Lowest last digit of the TIN
+
+The steps below will provide the cancer type assigned to the 106 unique patients.
+
+```{r patient_cancer}
+patient_cancer <- unique_visit %>% 
+  # join unique visits to cancer count: starting n 2241
+  left_join(cancer_count, by = c('BENE_ID', 'CANCER_TYPE')) %>% 
+  # find cancer count with max value
+  group_by(BENE_ID) %>% 
+  # filter by max cancer count: gets me to n 665
+  filter(n_cancer == max(n_cancer)) %>% 
+  # filter by max date (most recent episode) per subject: gets me to n 106
+  filter(LINE_1ST_EXPNS_DT == max(LINE_1ST_EXPNS_DT)) %>% 
+  # filter to patient id and cancer type
+  select(BENE_ID, CANCER_TYPE)
+```
+
+I had a couple patients with equal counts of cancer types that I needed to apply tie-breaker rules to. I only needed to apply the most recent episode rule to get to the cancer type assigned to the patient.
+
+View first couple rows of patient cancer type.
+
+```{r view_pat_cancer}
+head(patient_cancer)
+```
+
+Final check to make sure there are a 106 unique patients.
+
+```{r final_check}
+length(unique(patient_cancer$BENE_ID))
+```
+
+Write final patient_cancer_type.csv file to send back to Tuple Health.
+
+```{r write_file}
+write_csv(patient_cancer, path = 'patient_cancer_type.csv')
+```
+
+### Explanation of how Medicare determines patient's cancer type
+
+Medicare determines a patient's cancer type by finding the most commonly billed cancer type associated with the diagnoses code entered over a defined episode of care period. When a patient has an equally frequent number of treatments billed for two cancer types, the most recently treated cancer type is assigned. If two types of cancer are treated simultaneously at the most recent visit, the next most recent visit is considered and so on. If there's still a tie, the cancer type eligible for reconciliation is chosen, followed by the lowest service provider tax identification number.
+
+## Question 2: Sample analysis plan
+
+Scenario copied from evaluation:
+As part of our work, we help our clients develop interventions to increase the quality of care while reducing the overall cost of care for patients. For a client that is a physician practice, one possible intervention is extending office hours with the goal of reducing emergency room visits. The physician practice in question has multiple office locations and only has the resources to extend hours at one location. How would you determine at which location they should extend the hours?
+
+### Sample data analysis plan
+
+The goal of this analysis is to identify the office location that could benefit from increasing the hours in an effort to reduce emergency room visits. The first step to this analysis would be to see if we could link patients to emergency room visits. If so, we can then calculate the emergency room visit rates per office. We could then use characteristics/variables about each office, like number of clinicians, hours open, patient demographics for that office to build models (either generalized regression or tree-based methods to start) to evaluate the impact certain characteristics have on emergency room admissions rates. Since we want to know which office to extend hours in, the first generalized regression model that I would run would contain interaction terms between hours open and each office to see how emergency room visit rate to see the relationship between hours open and emergency room visits for each office. I would then like to have a discussion with the group on what we are trying to optimize in this case. Do we want to increase the hours of the office with the lowest rate of emergency room visits? Or do we want to increase the hours of the office with the highest rate of emergency room visits? I'd also want to discuss other factors that may influencing this.
+
+Another method that I'd run in tandem as well would be to models where the inference would be on patients instead of offices. I would build models that focus on patient characteristics that increase the risk for an emergency department visits. I would then identify the office with the most of these high-risk patients and increase that office's hours. 
+
+
